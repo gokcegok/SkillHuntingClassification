@@ -229,3 +229,148 @@ def high_correlated_cols(dataframe, plot=False, corr_th=0.9):
         plt.show()
 
     return drop_list
+
+
+
+def get_outlier_thresholds(dataframe, column, th_quantile=0.95):
+    """
+    This function calculates the upper and lower limits for finding outlier values in a variable.
+    Params
+    ------
+    dataframe: pd.DataFrame
+    column: str
+            column name
+    th_quantile: float
+                 Percentage of values that will not be considered outliers
+    Returns
+    -------
+    lower_limit
+    upper_limit
+    """
+    Q1 = dataframe[column].quantile(1-th_quantile)
+    Q3 = dataframe[column].quantile(th_quantile)
+    IQR = Q3 - Q1
+    upper_limit = Q3 + IQR * 1.5
+    lower_limit = Q1 - IQR * 1.5
+    print("lower limit: ", lower_limit, ", upper limit: ", upper_limit)
+    
+    return lower_limit, upper_limit
+    
+    
+def check_outlier(dataframe, col_name):
+    """
+    This function returns whether the entered variable
+    has outliers.
+    
+    Parameters
+    ----------
+    dataframe: pandas.DataFrame
+    col_name: string
+              column name
+    Return
+    -------
+    True/False
+    """
+    low_limit, up_limit = get_outlier_thresholds(dataframe, col_name)
+    if dataframe[(dataframe[col_name] > up_limit) | (dataframe[col_name] < low_limit)].any(axis=None):
+        return True
+    else:
+        return False
+    
+    
+def any_outliers(dataframe, column, th_quantile=0.95):
+    """
+    Params
+    ------
+    dataframe: pd.DataFrame
+    column: str
+            column name
+    th_quantile: float
+                 Percentage of values that will not be considered outliers
+            
+    """
+    low_limit, up_limit = get_outlier_thresholds(dataframe, column, th_quantile)
+    
+    return dataframe[(dataframe[column] < low_limit) | (dataframe[column] > up_limit)].any(axis=None)
+
+
+def replace_with_thresholds(dataframe, column, inplace=True, th_quantile=0.95):
+    """
+    Replace outliers with upper or lower thresholds.
+
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+
+    column : string
+        column name which searching for outlier values
+    inplace : boolean, optional
+        replace original dataframe with new dataframe. The default is True.
+    th_quantile : float, optional
+        Value for finding limit of outliers. The default is 0.95.
+
+    Returns
+    -------
+    dataframe_ : pandas.DataFrame
+        outliers suppressed dataframe
+
+    """
+    
+    
+    lower_limit, upper_limit = get_outlier_thresholds(dataframe, column, th_quantile)
+    
+    if inplace:
+        
+        dataframe.loc[(dataframe[column] < lower_limit), column] = lower_limit
+        dataframe.loc[(dataframe[column] > upper_limit), column] = upper_limit
+        
+    else:
+        
+        dataframe_ = dataframe.copy()
+        dataframe_.loc[(dataframe_[column] < lower_limit), column] = lower_limit
+        dataframe_.loc[(dataframe_[column] > upper_limit), column] = upper_limit
+        
+        return dataframe_
+    
+
+def missing_values_table(dataframe, na_name=False):
+    """
+    
+    Parameters
+    ----------
+    dataframe : pandas.DataFrame
+
+    na_name : Boolean, optional
+        If it is True, function returns name of null columns. The default is False.
+
+    Returns
+    -------
+    na_columns : list
+        list of null column names
+
+    """
+    na_columns = [col for col in dataframe.columns if dataframe[col].isnull().sum() > 0]
+
+    n_miss = dataframe[na_columns].isnull().sum().sort_values(ascending=False)
+    ratio = (dataframe[na_columns].isnull().sum() / dataframe.shape[0] * 100).sort_values(ascending=False)
+    missing_df = pd.concat([n_miss, np.round(ratio, 2)], axis=1, keys=['n_miss', 'ratio'])
+    print(missing_df, end="\n")
+
+    if na_name:
+        return na_columns
+    
+
+def plot_importance(model, features, num, save=False):
+    """
+    Gives a feature importance plot
+    """
+    feature_imp = pd.DataFrame({'Value': model.feature_importances_, 'Feature': features.columns})
+    plt.figure(figsize=(10, 2))
+    sns.set(font_scale=1)
+    sns.barplot(x="Value", y="Feature", data=feature_imp.sort_values(by="Value",
+                                                                     ascending=False)[0:num])
+    plt.title('Features')
+    plt.tight_layout()
+    plt.show()
+    if save:
+        plt.savefig('importances.png')
