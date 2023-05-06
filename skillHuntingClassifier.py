@@ -18,8 +18,57 @@ Created on Tue May  2 02:08:33 2023
 
 import pandas as pd
 import eda
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.metrics import accuracy_score, roc_auc_score, confusion_matrix
+from sklearn.model_selection import train_test_split, cross_validate, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.tree import DecisionTreeClassifier
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 
 
+# %% CV function
+
+def crossVal(classifier, name, X, y, output=False):
+    
+    """
+    Cross validation
+
+    Parameters
+    ----------
+    classifier : classifier object
+    
+    output : boolean, optional
+        If it is True, function returns the CV results. 
+        Else, prints classification metrics. 
+        The default is False.
+
+    Returns
+    -------
+    cv_results : TYPE
+        DESCRIPTION.
+
+    """
+    
+    model = classifier.fit(X, y)
+    
+    cv_results = cross_validate(model, X, y, cv=5,
+                                scoring=["accuracy", "f1", "precision",
+                                         "recall", "roc_auc"])
+    
+    print(name)
+    print("--------------------")
+    print("Accuracy:", round(cv_results["test_accuracy"].mean(), 4))
+    print("Recall:", round(cv_results["test_recall"].mean(), 4))
+    print("Precision:", round(cv_results["test_precision"].mean(), 4))
+    print("F1 Score:", round(cv_results["test_f1"].mean(), 4))
+    print("ROC AUC:", round(cv_results["test_roc_auc"].mean(), 4), "\n")
+    
+    if output == True:
+        return cv_results
+    
+    
 # %% DATASET
 
 # --------------------------------------------------------------------------- #
@@ -66,7 +115,6 @@ data_ = pd.merge(attributes, potential_labels, how="left",
 
 data = data_.copy()
 
-eda.check_df(data)
 # %% 
 # Dropping "1" (Goalkepper) in position_id column
 
@@ -80,7 +128,7 @@ print(data["potential_label"].value_counts())
 
 data = data[data["potential_label"] != "below_average"]
 
-# %% DATA PREPROCESSING
+# Preparing data for classification
 
 # Pivot table with 
 # "player_id", "position_id" and "potential_label" in the index, 
@@ -99,3 +147,117 @@ data.columns = data.columns.astype("str")
 # we now have a dataset with each row holding 
 # the points awarded to a player by the scouts, 
 # the player's position and the target variable!
+
+# %% DATA PREPROCESSING
+
+# EXPLORATORY DATA ANALYSIS
+
+eda.check_df(data)
+
+cat_cols, num_cols, cat_but_car = eda.grab_col_names(data, cat_th=5)
+
+
+for col in num_cols:
+    eda.check_outlier(data, col)
+    eda.num_summary(data, col, plot=True)
+
+# LABEL ENCODING
+
+label_encoder = LabelEncoder()
+data["potential_label"] = label_encoder.fit_transform(data["potential_label"])
+
+# %% CLASSIFICATION DATA
+
+y = data["potential_label"]
+X = data.drop(["position_id", "player_id", "potential_label"], axis=1)
+
+# Scaling numeric columns
+X = pd.DataFrame(StandardScaler().fit_transform(X), columns=X.columns)
+
+
+# %% MODEL SELECTION
+
+models = {"Logistic Regression": LogisticRegression(random_state=15),
+          "CART": DecisionTreeClassifier(random_state=15),
+          "Gradient Boosting": GradientBoostingClassifier(random_state=15),
+          "XGBoost": XGBClassifier(random_state=15),
+          "LightGBM": LGBMClassifier(random_state=15)}
+
+
+for model_name in models.keys():
+    
+    crossVal(models[model_name], model_name, X, y)
+
+# %% LightGBM 
+
+# Parameter Optimization
+
+lgbm_params = {"max_bin": [255, 150, 300],
+               "max_depth": [100, 200, 300, 400, 500],
+               "colsample_bytree": [0.5, 0.75, 1],
+               "learning_rate": [0.05, 0.075, 0.01, 0.025]}
+
+print("Searching for parameters...")
+
+lgbm = LGBMClassifier().fit(X, y)
+
+lgbm_best_search = GridSearchCV(estimator=lgbm, param_grid=lgbm_params,
+                                cv=5, verbose=1).fit(X, y)
+
+lgbm_best_search.best_params_
+
+"""
+Best params in first search: 
+    
+best_params_1 = {'colsample_bytree': 0.75,
+                 'learning_rate': 0.025,
+                 'max_bin': 255,
+                 'max_depth': 100}
+"""
+
+lgbm_final = LGBMClassifier(**lgbm_best_search.best_params_,
+                             random_state=15).fit(X, y)
+
+crossVal(lgbm, "LGBM Primary Results", X, y)
+crossVal(lgbm_final, "LGBM Final Results", X, y)
+
+# %% Prediction
+
+y_pred = lgbm_final.predict(X)
+confusion_matrix(y, y_pred)
+
+
+lgbm_params_ = {"colsample_bytree": [0.75, 0.80, 0.90],
+               "learning_rate": [0.025, 0.03],
+               "min_child_weight": [0.01, 0.05, 0.03],
+               "num_leaves": [31, 25, 20, 15]}
+
+lgbm_best_search_ = GridSearchCV(estimator=lgbm, param_grid=lgbm_params_,
+                                cv=5, verbose=1).fit(X, y)
+
+lgbm_final.get_params()
+lgbm_best_search_.best_params_
+
+"""
+Best params in second search:
+best_params_2 = {'colsample_bytree': 0.75,
+                 'learning_rate': 0.03,
+                 'min_child_weight': 0.01,
+                 'num_leaves': 31}
+
+"""
+lgbm_final_ = LGBMClassifier(**lgbm_best_search_.best_params_,
+                             random_state=15).fit(X, y)
+
+crossVal(lgbm_final, "LGBM Final Results", X, y)
+crossVal(lgbm_final_, "LGBM Final Results 2", X, y)
+
+y_pred_ = lgbm_final_.predict(X)
+tn, fp, fn, tp = confusion_matrix(y, y_pred_).ravel()
+(tn, fp, fn, tp)
+
+# %%
+
+eda.plot_importance(lgbm_final, X, num=10)
+
+data["predicted_label"] = label_encoder.inverse_transform(y_pred_)
